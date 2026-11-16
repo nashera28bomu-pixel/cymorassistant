@@ -178,6 +178,7 @@ const aiUsageSchema = new Schema(
     failures: { type: Number, default: 0 },
     promptTokens: { type: Number, default: 0 },
     outputTokens: { type: Number, default: 0 },
+    lastError: { type: Schema.Types.Mixed, default: null },
   },
   { versionKey: false },
 );
