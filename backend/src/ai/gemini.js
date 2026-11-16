@@ -107,6 +107,7 @@ export class AiService {
         const retryable = e.code === 'TIMEOUT' || status === 429 || status === 503 || status === 500 || status === 504 || /ECONNRESET|ETIMEDOUT|fetch failed/i.test(e.message || '');
         if (!retryable || attempt >= this.maxRetries) {
           this.lastError = { at: new Date(), message: String(e.message).slice(0, 200), status };
+          log.error({ status, err: String(e.message).slice(0, 500) }, 'Gemini request failed');
           await recordUsage({ ok: false });
           throw new AiUnavailableError(`AI request failed: ${String(e.message).slice(0, 120)}`, { retryable, cause: e });
         }
