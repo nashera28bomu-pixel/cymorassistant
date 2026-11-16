@@ -17,6 +17,6 @@
     "hash": "npm run hash --prefix backend --",
     "test": "npm test --prefix backend",
     "test:integration": "npm run test:integration --prefix backend",
-    "heroku-postbuild": "npm ci --prefix backend --omit=dev && npm ci --prefix frontend && npm run build --prefix frontend && rm -rf frontend/node_modules"
-  }
+    "heroku-postbuild": "npm ci --prefix backend --omit=dev && npm ci --prefix frontend --include=dev && npm run build --prefix frontend && rm -rf frontend/node_modules"
+}
 }
