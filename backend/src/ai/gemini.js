@@ -14,6 +14,7 @@ export class AiUnavailableError extends Error {
   }
 }
 
+const FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.0-flash'];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -31,31 +32,51 @@ export class GeminiProvider {
   }
 
   async generate({ systemInstruction, userContent, signal, temperature = 0.7, json = true }) {
-    const response = await this.client.models.generateContent({
-      model: this.model,
-      contents: userContent,
-      config: {
-        systemInstruction,
-        temperature,
-        maxOutputTokens: 1024,
-        ...(json ? { responseMimeType: 'application/json' } : {}),
-        abortSignal: signal,
-      },
-    });
-    const u = response.usageMetadata || {};
-    return { text: response.text ?? '', usage: { promptTokens: u.promptTokenCount || 0, outputTokens: u.candidatesTokenCount || 0 } };
+    // Try the configured model first; if it does not exist for this key, fall back to known-good ones.
+    const models = [this.model, ...FALLBACK_MODELS.filter((m) => m !== this.model)];
+    let lastErr;
+    for (const model of models) {
+      try {
+        const response = await this.client.models.generateContent({
+          model,
+          contents: userContent,
+          config: {
+            systemInstruction,
+            temperature,
+            // Gemini 2.5 "thinking" tokens count against this budget; too small a value truncates the JSON reply.
+            maxOutputTokens: 4096,
+            ...(/gemini-2\.5-flash/.test(model) ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+            ...(json ? { responseMimeType: 'application/json' } : {}),
+            abortSignal: signal,
+          },
+        });
+        const u = response.usageMetadata || {};
+        const text = response.text ?? '';
+        const finish = response.candidates?.[0]?.finishReason;
+        if (!text || (finish && finish !== 'STOP')) log.warn({ model, finish, empty: !text }, 'Gemini returned an empty or incomplete reply');
+        if (model !== this.model) this.model = model; // remember the working model
+        return { text, usage: { promptTokens: u.promptTokenCount || 0, outputTokens: u.candidatesTokenCount || 0 } };
+      } catch (e) {
+        lastErr = e;
+        const st = e?.status ?? e?.code ?? e?.error?.code;
+        if (st === 404 || /not found|not supported for generateContent/i.test(String(e?.message))) {
+          log.warn({ model, status: st }, 'Gemini model unavailable; trying the next one');
+          continue;
+        }
+        throw e;
+      }
+    }
+    throw lastErr;
   }
 }
 
 const statusOf = (e) => e?.status ?? e?.code ?? e?.error?.code;
 
-async function recordUsage({ ok, usage }) {
+async function recordUsage({ ok, usage, error }) {
   try {
-    await AiUsage.updateOne(
-      { day: today() },
-      { $inc: { requests: 1, failures: ok ? 0 : 1, promptTokens: usage?.promptTokens || 0, outputTokens: usage?.outputTokens || 0 } },
-      { upsert: true },
-    );
+    const update = { $inc: { requests: 1, failures: ok ? 0 : 1, promptTokens: usage?.promptTokens || 0, outputTokens: usage?.outputTokens || 0 } };
+    if (!ok && error) update.$set = { lastError: { at: new Date(), message: String(error.message || error).slice(0, 300), status: error.status ?? null } };
+    await AiUsage.updateOne({ day: today() }, update, { upsert: true });
   } catch {
     /* usage tracking must never break replies */
   }
@@ -108,7 +129,7 @@ export class AiService {
         if (!retryable || attempt >= this.maxRetries) {
           this.lastError = { at: new Date(), message: String(e.message).slice(0, 200), status };
           log.error({ status, err: String(e.message).slice(0, 500) }, 'Gemini request failed');
-          await recordUsage({ ok: false });
+          await recordUsage({ ok: false, error: { message: e.message, status } });
           throw new AiUnavailableError(`AI request failed: ${String(e.message).slice(0, 120)}`, { retryable, cause: e });
         }
         const delay = this.baseDelayMs * 2 ** attempt + Math.random() * 250;
@@ -131,7 +152,7 @@ export class AiService {
       } catch (e) {
         if (!(e instanceof InvalidAiResponseError)) throw e;
         lastInvalid = e;
-        await recordUsage({ ok: false, usage });
+        await recordUsage({ ok: false, usage, error: { message: `Invalid AI output: ${e.message}` } });
         log.warn({ reason: e.message }, 'Invalid AI output; re-asking once');
         userContent += '\n\nYour previous output was not valid JSON for the required schema. Reply with ONLY the JSON object.';
       }
