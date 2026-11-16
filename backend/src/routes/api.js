@@ -86,7 +86,7 @@ export function createApiRouter({ config }) {
     res.json({
       whatsapp: { state: sess?.connectionState || 'disconnected', me: sess?.me || null, lastConnectedAt: sess?.lastConnectedAt || null },
       assistant: { enabled: settings.assistantEnabled, active: automationActive(settings), pausedUntil: settings.pausedUntil },
-      gemini: { configured: Boolean(config.GEMINI_API_KEY), model: settings.ai.model || config.GEMINI_MODEL, requestsToday: usage?.requests || 0, failuresToday: usage?.failures || 0 },
+      gemini: { configured: Boolean(config.GEMINI_API_KEY), model: settings.ai.model || config.GEMINI_MODEL, requestsToday: usage?.requests || 0, failuresToday: usage?.failures || 0, lastError: usage?.lastError || null },
       mongodb: { status: databaseStatus() },
       heroku: { web: 'running', dyno: process.env.DYNO || 'local', worker: heartbeatAge === null ? 'unknown' : heartbeatAge < 60_000 ? 'running' : 'not responding', workerHeartbeatAgeSec: heartbeatAge === null ? null : Math.round(heartbeatAge / 1000) },
       counts: { contacts, activeConversations: active, pendingRequests: pending, kuccpsInquiries: kuccps, webInquiries: web, softwareInquiries: software, messagesToday: today },
